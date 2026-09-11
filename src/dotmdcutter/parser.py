@@ -5,6 +5,7 @@ from .models import BlockType, InlineSpan, MarkdownBlock, SpanStyle
 
 _INLINE_REGEX = re.compile(
     r"(`(?P<code>[^`]+)`)"
+    r"|((?<!\\)\$(?!\s)(?P<math>[^$\n]+?)(?<!\s)\$)"
     r"|(\*\*\*(?P<bi>[^*]+)\*\*\*)"
     r"|(\*\*(?P<bold>[^*]+)\*\*)"
     r"|(\*(?P<italic>[^*]+)\*)"
@@ -13,7 +14,7 @@ _INLINE_REGEX = re.compile(
 
 
 def parse_inline_spans(text: str) -> List[InlineSpan]:
-    """Parse inline formatting (bold, italic, inline code, strike) into spans."""
+    """Parse inline formatting (bold, italic, inline code, strike, inline LaTeX) into spans."""
     if not text:
         return []
 
@@ -27,6 +28,8 @@ def parse_inline_spans(text: str) -> List[InlineSpan]:
 
         if match.group("code"):
             spans.append(InlineSpan(text=match.group("code"), style=SpanStyle.CODE))
+        elif match.group("math"):
+            spans.append(InlineSpan(text=match.group("math"), style=SpanStyle.MATH))
         elif match.group("bi"):
             spans.append(InlineSpan(text=match.group("bi"), style=SpanStyle.BOLD_ITALIC))
         elif match.group("bold"):
@@ -46,7 +49,8 @@ def parse_inline_spans(text: str) -> List[InlineSpan]:
 
 def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[MarkdownBlock]:
     """
-    Parses a Markdown string into a sequence of structured MarkdownBlock elements.
+    Parses a Markdown string into a sequence of structured MarkdownBlock elements,
+    with full support for math blocks ($$ ... $$) and Unicode symbols.
     """
     lines = markdown_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     blocks: List[MarkdownBlock] = []
@@ -54,6 +58,9 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
     in_code_block = False
     code_lines: List[str] = []
     code_lang = ""
+
+    in_math_block = False
+    math_lines: List[str] = []
 
     i = 0
     while i < len(lines):
@@ -84,6 +91,52 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
 
         if in_code_block:
             code_lines.append(line)
+            i += 1
+            continue
+
+        # Check for block math ($$ ... $$)
+        if stripped.startswith("$$"):
+            if in_math_block:
+                blocks.append(
+                    MarkdownBlock(
+                        block_type=BlockType.MATH_BLOCK,
+                        latex_code="\n".join(math_lines),
+                    )
+                )
+                math_lines = []
+                in_math_block = False
+                i += 1
+                continue
+            elif stripped.endswith("$$") and len(stripped) > 2:
+                # Single line block math: $$ formula $$
+                formula = stripped[2:-2].strip()
+                blocks.append(
+                    MarkdownBlock(
+                        block_type=BlockType.MATH_BLOCK,
+                        latex_code=formula,
+                    )
+                )
+                i += 1
+                continue
+            else:
+                # Multi-line block math starts
+                in_math_block = True
+                math_lines = []
+                i += 1
+                continue
+
+        if in_math_block:
+            if stripped == "$$":
+                blocks.append(
+                    MarkdownBlock(
+                        block_type=BlockType.MATH_BLOCK,
+                        latex_code="\n".join(math_lines),
+                    )
+                )
+                math_lines = []
+                in_math_block = False
+            else:
+                math_lines.append(line)
             i += 1
             continue
 
@@ -176,7 +229,7 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
             next_stripped = next_line.strip()
             if not next_stripped:
                 break
-            if next_stripped.startswith(("#", "```", "~~~", ">", "-", "*", "+")) or re.match(r"^\d+\.\s+", next_stripped):
+            if next_stripped.startswith(("#", "```", "~~~", "$$", ">", "-", "*", "+")) or re.match(r"^\d+\.\s+", next_stripped):
                 break
             if re.match(r"^(-{3,}|\*{3,}|_{3,})$", next_stripped):
                 break
@@ -194,13 +247,20 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
         )
         i += 1
 
-    # Close any unclosed code block
+    # Close any unclosed code or math block
     if in_code_block and code_lines:
         blocks.append(
             MarkdownBlock(
                 block_type=BlockType.CODE_BLOCK,
                 code_lines=code_lines,
                 language=code_lang,
+            )
+        )
+    if in_math_block and math_lines:
+        blocks.append(
+            MarkdownBlock(
+                block_type=BlockType.MATH_BLOCK,
+                latex_code="\n".join(math_lines),
             )
         )
 

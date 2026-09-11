@@ -14,14 +14,14 @@ class MarkdownRenderer:
         self.fm = FontManager(config.custom_font_path, config.custom_mono_font_path)
         self.layout_engine = LayoutEngine(config, self.fm)
 
-    def _get_font(self, size: int, style: SpanStyle) -> ImageFont.ImageFont:
+    def _style_name(self, style: SpanStyle) -> str:
         if style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC):
-            return self.fm.get_font(size, "bold")
+            return "bold"
         elif style == SpanStyle.ITALIC:
-            return self.fm.get_font(size, "italic")
+            return "italic"
         elif style == SpanStyle.CODE:
-            return self.fm.get_font(size, "mono")
-        return self.fm.get_font(size, "regular")
+            return "mono"
+        return "regular"
 
     def render_page(self, page: PageLayout, total_pages: int) -> Image.Image:
         """Renders a single PageLayout onto a PIL Image of width x height."""
@@ -44,23 +44,44 @@ class MarkdownRenderer:
                 curr_y += line.height
                 continue
 
-            if line.is_code:
-                # Code card background & border
+            if line.is_math_block and line.math_img is not None:
+                # Math formula block card
                 box_x1 = mx
                 box_x2 = w - mx
                 box_y1 = curr_y
                 box_y2 = curr_y + line.height
 
-                # Draw card background
+                # Draw formula card background & border
+                draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=self.theme.math_card_bg)
+                draw.rectangle([box_x1, box_y1, box_x2, box_y2], outline=self.theme.math_card_border, width=1)
+
+                # Paste formula image centered horizontally and vertically
+                m_img = line.math_img
+                paste_x = box_x1 + (box_x2 - box_x1 - m_img.width) // 2
+                paste_y = box_y1 + (line.height - m_img.height) // 2
+
+                # Alpha composite
+                if m_img.mode == "RGBA":
+                    img.paste(m_img, (paste_x, paste_y), mask=m_img.split()[3])
+                else:
+                    img.paste(m_img, (paste_x, paste_y))
+
+                curr_y += line.height
+                continue
+
+            if line.is_code:
+                box_x1 = mx
+                box_x2 = w - mx
+                box_y1 = curr_y
+                box_y2 = curr_y + line.height
+
                 draw.rectangle([box_x1, box_y1, box_x2, box_y2], fill=self.theme.code_bg)
-                # Left & right border
                 draw.line([(box_x1, box_y1), (box_x1, box_y2)], fill=self.theme.code_border, width=1)
                 draw.line([(box_x2, box_y1), (box_x2, box_y2)], fill=self.theme.code_border, width=1)
 
                 if line.box_start:
                     draw.line([(box_x1, box_y1), (box_x2, box_y1)], fill=self.theme.code_border, width=1)
                     if line.box_lang:
-                        # Draw small language badge
                         badge_font = self.fm.get_font(9, "mono")
                         badge_text = line.box_lang.upper()
                         bw = draw.textlength(badge_text, font=badge_font)
@@ -74,29 +95,36 @@ class MarkdownRenderer:
                 if line.box_end:
                     draw.line([(box_x1, box_y2), (box_x2, box_y2)], fill=self.theme.code_border, width=1)
 
-                # Draw code text
                 text_x = mx + line.x_offset
                 for frag in line.fragments:
-                    f = self._get_font(frag.font_size, frag.style)
-                    draw.text((text_x, curr_y), frag.text, font=f, fill=self.theme.code_text)
-                    fw = draw.textlength(frag.text, font=f)
-                    text_x += fw
+                    text_x = self.fm.draw_text(
+                        draw=draw,
+                        xy=(text_x, curr_y),
+                        text=frag.text,
+                        size=frag.font_size,
+                        default_style="mono",
+                        fill=self.theme.code_text,
+                    )
 
                 curr_y += line.height
                 continue
 
             if line.is_quote:
-                # Vertical quote bar on the left
                 bar_x = mx + 2
                 draw.line([(bar_x, curr_y), (bar_x, curr_y + line.height)], fill=self.theme.quote_bar, width=3)
 
                 text_x = mx + line.x_offset
                 for frag in line.fragments:
-                    f = self._get_font(frag.font_size, frag.style)
                     color = self.theme.accent if frag.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC) else self.theme.quote_text
-                    draw.text((text_x, curr_y), frag.text, font=f, fill=color)
-                    fw = draw.textlength(frag.text, font=f)
-                    text_x += fw
+                    st = "bold" if frag.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC) else "italic"
+                    text_x = self.fm.draw_text(
+                        draw=draw,
+                        xy=(text_x, curr_y),
+                        text=frag.text,
+                        size=frag.font_size,
+                        default_style=st,
+                        fill=color,
+                    )
 
                 curr_y += line.height
                 continue
@@ -106,16 +134,32 @@ class MarkdownRenderer:
 
             # Bullet
             if line.bullet_symbol:
-                b_font = self.fm.get_font(self.config.base_font_size, "bold")
-                b_x = mx + line.bullet_x
-                draw.text((b_x, curr_y), line.bullet_symbol, font=b_font, fill=self.theme.accent)
+                self.fm.draw_text(
+                    draw=draw,
+                    xy=(mx + line.bullet_x, curr_y),
+                    text=line.bullet_symbol,
+                    size=self.config.base_font_size,
+                    default_style="bold",
+                    fill=self.theme.accent,
+                )
 
-            # Fragments
+            # Line fragments
             for frag in line.fragments:
-                font = self._get_font(frag.font_size, frag.style)
-                frag_w = draw.textlength(frag.text, font=font)
+                if frag.is_math and frag.math_img is not None:
+                    # Inline math formula image
+                    m_img = frag.math_img
+                    paste_y = curr_y + max(0, (line.height - m_img.height) // 2)
+                    if m_img.mode == "RGBA":
+                        img.paste(m_img, (int(text_x), int(paste_y)), mask=m_img.split()[3])
+                    else:
+                        img.paste(m_img, (int(text_x), int(paste_y)))
+                    text_x += frag.width
+                    continue
 
-                # Color determination
+                # Normal text fragment
+                st = self._style_name(frag.style)
+                frag_w = self.fm.measure_text(frag.text, frag.font_size, st)
+
                 if line.is_header:
                     if line.header_level == 1:
                         color = self.theme.header1
@@ -125,7 +169,6 @@ class MarkdownRenderer:
                         color = self.theme.header3
                 elif frag.style == SpanStyle.CODE:
                     color = self.theme.inline_code_text
-                    # Draw inline code pill background
                     draw.rectangle(
                         [text_x - 1, curr_y + 1, text_x + frag_w + 1, curr_y + line.height - 2],
                         fill=self.theme.inline_code_bg,
@@ -133,7 +176,14 @@ class MarkdownRenderer:
                 else:
                     color = self.theme.text
 
-                draw.text((text_x, curr_y), frag.text, font=font, fill=color)
+                self.fm.draw_text(
+                    draw=draw,
+                    xy=(text_x, curr_y),
+                    text=frag.text,
+                    size=frag.font_size,
+                    default_style=st,
+                    fill=color,
+                )
 
                 if frag.style == SpanStyle.STRIKETHROUGH:
                     strike_y = curr_y + line.height // 2
@@ -151,7 +201,6 @@ class MarkdownRenderer:
             fx = w - mx - fw
             fy = h - my - 10
 
-            # Subtle top hairline for footer
             draw.line([(mx, fy - 2), (w - mx, fy - 2)], fill=self.theme.hr_color, width=1)
             draw.text((fx, fy), footer_text, font=footer_font, fill=self.theme.footer_text)
 

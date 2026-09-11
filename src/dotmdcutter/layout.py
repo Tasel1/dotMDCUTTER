@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
-from PIL import ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
+from .latex import render_latex_to_image, rgb_to_hex
 from .models import BlockType, InlineSpan, MarkdownBlock, PageConfig, SpanStyle
-from .themes import FontManager
+from .themes import FontManager, get_theme
 
 
 @dataclass
@@ -13,6 +14,8 @@ class FormattedToken:
     font_size: int
     width: float
     is_whitespace: bool = False
+    is_math: bool = False
+    math_img: Optional[Image.Image] = None
 
 
 @dataclass
@@ -21,6 +24,8 @@ class LineFragment:
     style: SpanStyle
     font_size: int
     width: float
+    is_math: bool = False
+    math_img: Optional[Image.Image] = None
 
 
 @dataclass
@@ -37,6 +42,8 @@ class RenderLine:
     is_code: bool = False
     is_hr: bool = False
     is_empty: bool = False
+    is_math_block: bool = False
+    math_img: Optional[Image.Image] = None
     box_start: bool = False
     box_end: bool = False
     box_lang: str = ""
@@ -57,44 +64,65 @@ class LayoutEngine:
     def __init__(self, config: PageConfig, font_manager: FontManager):
         self.config = config
         self.fm = font_manager
+        self.theme = get_theme(config.theme_name)
 
-    def _get_font(self, size: int, style: SpanStyle) -> ImageFont.ImageFont:
-        if style == SpanStyle.BOLD:
-            return self.fm.get_font(size, "bold")
+    def _style_name(self, style: SpanStyle) -> str:
+        if style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC):
+            return "bold"
         elif style == SpanStyle.ITALIC:
-            return self.fm.get_font(size, "italic")
-        elif style == SpanStyle.BOLD_ITALIC:
-            return self.fm.get_font(size, "bold")
+            return "italic"
         elif style == SpanStyle.CODE:
-            return self.fm.get_font(size, "mono")
-        return self.fm.get_font(size, "regular")
+            return "mono"
+        return "regular"
 
     def _measure_text(self, text: str, size: int, style: SpanStyle) -> float:
-        font = self._get_font(size, style)
-        # Use getlength if available or fallback
-        if hasattr(font, "getlength"):
-            return font.getlength(text)
-        bbox = font.getbbox(text)
-        return bbox[2] - bbox[0]
+        style_str = self._style_name(style)
+        return self.fm.measure_text(text, size, style_str)
 
     def _tokenize_spans(self, spans: List[InlineSpan], font_size: int) -> List[FormattedToken]:
         tokens: List[FormattedToken] = []
         for span in spans:
-            # Split words and whitespace
             raw_text = span.text
             if not raw_text:
                 continue
 
-            # Split into chunks of whitespace vs non-whitespace
+            # Inline math formula span
+            if span.style == SpanStyle.MATH:
+                color_hex = rgb_to_hex(self.theme.header1)
+                # Render inline formula
+                math_im = render_latex_to_image(
+                    formula=raw_text,
+                    font_size=font_size,
+                    color_hex=color_hex,
+                    max_width=self.config.content_width,
+                )
+                if math_im is not None:
+                    tokens.append(
+                        FormattedToken(
+                            text=raw_text,
+                            style=SpanStyle.MATH,
+                            font_size=font_size,
+                            width=float(math_im.width),
+                            is_whitespace=False,
+                            is_math=True,
+                            math_img=math_im,
+                        )
+                    )
+                    continue
+                else:
+                    # Fallback to plain text if invalid syntax
+                    raw_text = f"${raw_text}$"
+                    span.style = SpanStyle.CODE
+
+            # Normal text tokenization
             idx = 0
             while idx < len(raw_text):
                 char = raw_text[idx]
                 if char.isspace():
-                    # Collect whitespace
                     ws_start = idx
                     while idx < len(raw_text) and raw_text[idx].isspace():
                         idx += 1
-                    ws_str = " "  # normalize multiple spaces/tabs to single space
+                    ws_str = " "
                     w = self._measure_text(ws_str, font_size, span.style)
                     tokens.append(
                         FormattedToken(
@@ -106,7 +134,6 @@ class LayoutEngine:
                         )
                     )
                 else:
-                    # Collect word
                     word_start = idx
                     while idx < len(raw_text) and not raw_text[idx].isspace():
                         idx += 1
@@ -140,7 +167,6 @@ class LayoutEngine:
         current_width = 0.0
 
         for token in tokens:
-            # If start of line and token is whitespace, skip it
             if not current_fragments and token.is_whitespace:
                 continue
 
@@ -151,17 +177,16 @@ class LayoutEngine:
                         style=token.style,
                         font_size=token.font_size,
                         width=token.width,
+                        is_math=token.is_math,
+                        math_img=token.math_img,
                     )
                 )
                 current_width += token.width
             else:
-                # Token exceeds line width
                 if token.is_whitespace:
-                    # Trailing whitespace can just end the line
                     continue
 
                 if current_fragments:
-                    # Finish current line
                     is_first_line = len(lines) == 0
                     lines.append(
                         RenderLine(
@@ -178,9 +203,21 @@ class LayoutEngine:
                     current_fragments = []
                     current_width = 0.0
 
-                # Check if single word is wider than max_width (e.g. very long string)
-                if token.width > max_width:
-                    # Break word character by character
+                if token.is_math:
+                    # Single math formula is placed on new line
+                    current_fragments.append(
+                        LineFragment(
+                            text=token.text,
+                            style=token.style,
+                            font_size=token.font_size,
+                            width=token.width,
+                            is_math=True,
+                            math_img=token.math_img,
+                        )
+                    )
+                    current_width = token.width
+                elif token.width > max_width:
+                    # Break long word character by character
                     sub_str = ""
                     for char in token.text:
                         char_w = self._measure_text(char, token.font_size, token.style)
@@ -255,13 +292,12 @@ class LayoutEngine:
         content_w = self.config.content_width
         content_h = self.config.content_height
 
-        # Precalculate standard line heights
-        font_regular = self._get_font(base_sz, SpanStyle.NORMAL)
+        font_regular = self.fm.get_font(base_sz, "regular")
         reg_metrics = font_regular.getmetrics()
         reg_line_h = reg_metrics[0] + reg_metrics[1] + self.config.line_spacing
 
         mono_sz = max(10, base_sz - 1)
-        font_mono = self._get_font(mono_sz, SpanStyle.CODE)
+        font_mono = self.fm.get_font(mono_sz, "mono")
         mono_metrics = font_mono.getmetrics()
         mono_line_h = mono_metrics[0] + mono_metrics[1] + 2
 
@@ -271,7 +307,6 @@ class LayoutEngine:
 
         def finish_page():
             nonlocal current_page_lines, current_page_h
-            # Remove trailing empty lines
             while current_page_lines and current_page_lines[-1].is_empty:
                 current_page_h -= current_page_lines[-1].height
                 current_page_lines.pop()
@@ -292,7 +327,6 @@ class LayoutEngine:
             if current_page_h == 0 or spacing_h <= 0:
                 return
             if current_page_lines and current_page_lines[-1].is_empty:
-                # Collapse: ensure previous empty line is at least this height, don't stack
                 prev = current_page_lines[-1]
                 if prev.height < spacing_h:
                     diff = spacing_h - prev.height
@@ -305,7 +339,7 @@ class LayoutEngine:
                 current_page_lines.append(RenderLine(is_empty=True, height=spacing_h))
                 current_page_h += spacing_h
 
-        for block_idx, block in enumerate(blocks):
+        for block in blocks:
             if block.block_type == BlockType.PAGE_BREAK:
                 finish_page()
                 continue
@@ -322,13 +356,42 @@ class LayoutEngine:
                 current_page_h += hr_h
                 continue
 
+            if block.block_type == BlockType.MATH_BLOCK:
+                color_hex = rgb_to_hex(self.theme.header1)
+                math_im = render_latex_to_image(
+                    formula=block.latex_code,
+                    font_size=base_sz + 1,
+                    color_hex=color_hex,
+                    max_width=content_w - 12,
+                )
+                if math_im is not None:
+                    card_h = math_im.height + 10
+                    # Keep whole math card on new page if doesn't fit
+                    if current_page_h > 0 and card_h <= content_h and current_page_h + card_h > content_h:
+                        finish_page()
+
+                    current_page_lines.append(
+                        RenderLine(
+                            is_math_block=True,
+                            math_img=math_im,
+                            height=card_h,
+                        )
+                    )
+                    current_page_h += card_h
+                    add_space(self.config.paragraph_spacing)
+                    continue
+                else:
+                    # Fallback to code block if LaTeX fails
+                    block.block_type = BlockType.CODE_BLOCK
+                    block.code_lines = [f"$${block.latex_code}$$"]
+                    block.language = "latex"
+
             if block.block_type == BlockType.HEADER:
                 h_size = base_sz + 4 if block.level == 1 else (base_sz + 2 if block.level == 2 else base_sz + 1)
-                h_font = self._get_font(h_size, SpanStyle.BOLD)
+                h_font = self.fm.get_font(h_size, "bold")
                 h_metrics = h_font.getmetrics()
                 h_line_h = h_metrics[0] + h_metrics[1] + 3
 
-                # Ensure all header spans are bold
                 for sp in block.spans:
                     if sp.style == SpanStyle.NORMAL:
                         sp.style = SpanStyle.BOLD
@@ -343,7 +406,6 @@ class LayoutEngine:
                     header_level=block.level,
                 )
 
-                # Keep-with-next: if header lines + at least 1 line of content don't fit, push header to next page
                 total_h_needed = sum(l.height for l in h_lines) + reg_line_h + self.config.paragraph_spacing
                 if current_page_h > 0 and current_page_h + total_h_needed > content_h:
                     finish_page()
@@ -354,7 +416,6 @@ class LayoutEngine:
                     current_page_lines.append(l)
                     current_page_h += l.height
 
-                # Paragraph spacing after header
                 add_space(max(3, self.config.paragraph_spacing // 2))
                 continue
 
@@ -379,7 +440,6 @@ class LayoutEngine:
             if block.block_type == BlockType.BLOCKQUOTE:
                 quote_indent = 12
                 avail_w = content_w - quote_indent
-                # In quote blocks, normal text is styled as italic
                 quote_spans = []
                 for sp in block.spans:
                     new_style = SpanStyle.BOLD_ITALIC if sp.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC) else SpanStyle.ITALIC
@@ -431,7 +491,6 @@ class LayoutEngine:
                     current_page_lines.append(l)
                     current_page_h += l.height
 
-                # Small spacing after list item
                 add_space(max(2, self.config.paragraph_spacing // 3))
                 continue
 
@@ -442,14 +501,12 @@ class LayoutEngine:
 
                 badge_w = (self._measure_text(block.language.upper(), 9, SpanStyle.CODE) + 14) if block.language else 0
 
-                # Break each code line if it exceeds avail_code_w
                 wrapped_code_lines: List[str] = []
                 for l_idx, cl in enumerate(code_lines):
                     if not cl:
                         wrapped_code_lines.append("")
                         continue
 
-                    # First line needs to reserve space for language badge if present
                     max_line_w = (avail_code_w - badge_w) if (l_idx == 0 and badge_w > 0) else avail_code_w
 
                     cl_w = self._measure_text(cl, mono_sz, SpanStyle.CODE)
@@ -468,9 +525,7 @@ class LayoutEngine:
                         if sub:
                             wrapped_code_lines.append(sub)
 
-                # Calculate total height of the code block
                 total_code_h = len(wrapped_code_lines) * mono_line_h + 2 * card_padding
-                # If the entire code block fits on a single page, but doesn't fit on current page, move it to next page
                 if current_page_h > 0 and total_code_h <= content_h and current_page_h + total_code_h > content_h:
                     finish_page()
 
@@ -509,7 +564,6 @@ class LayoutEngine:
 
         finish_page()
         if not pages:
-            # Empty document -> at least 1 blank page
             pages.append(PageLayout(page_number=1, lines=[], total_height=0))
 
         return pages

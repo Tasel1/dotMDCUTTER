@@ -12,6 +12,7 @@ class BlockType(str, Enum):
     THEMATIC_BREAK = "thematic_break"
     PAGE_BREAK = "page_break"
     EMPTY_LINE = "empty_line"
+    MATH_BLOCK = "math_block"
 
 
 class SpanStyle(str, Enum):
@@ -21,6 +22,7 @@ class SpanStyle(str, Enum):
     BOLD_ITALIC = "bold_italic"
     CODE = "code"
     STRIKETHROUGH = "strikethrough"
+    MATH = "math"
 
 
 @dataclass
@@ -38,6 +40,7 @@ class MarkdownBlock:
     language: str = ""
     is_ordered: bool = False
     order_number: Optional[int] = None
+    latex_code: str = ""
 
 
 @dataclass
