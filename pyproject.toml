@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dotmdcutter"
+version = "1.0.0"
+description = "Pixel-perfect Markdown to 320x240 image slicer for small displays, smartwatches, and microcontrollers."
+authors = [{ name = "dotMDCUTTER Team" }]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "pillow>=10.0.0",
+    "PyQt6>=6.4.0",
+]
+
+[project.scripts]
+dotmdcutter = "dotmdcutter.cli:run_cli"

@@ -1,0 +1,47 @@
+# Task Checklist: dotMDCUTTER
+
+- [x] Task 1: Foundation & Themes (`src/dotmdcutter/themes.py`, `src/dotmdcutter/models.py`)
+  - [x] Color schemes (dark, light, eink, amber, matrix)
+  - [x] Font resolution and loader (Google Noto Sans Cyrillic, fallback to system fonts)
+  - [x] PageConfig and Block data models
+- [x] Task 2: Markdown Tokenizer & AST Parser (`src/dotmdcutter/parser.py`)
+  - [x] Headers (H1-H4)
+  - [x] Paragraphs & inline spans (plain, bold, italic, code, strikethrough)
+  - [x] Fenced code blocks (language, code lines)
+  - [x] Blockquotes
+  - [x] Unordered & ordered lists
+  - [x] Thematic breaks / horizontal rules
+  - [x] Explicit page breaks (`---page---`, `---break---`, `<!-- pagebreak -->`, `\newpage`)
+- [x] Task 3: Layout & Pagination Engine (`src/dotmdcutter/layout.py`)
+  - [x] Line-wrapping algorithm with word boundary awareness
+  - [x] Height and line spacing measurement
+  - [x] Page breaking without splitting text lines horizontally
+  - [x] Orphan header prevention (`keep_with_next`)
+  - [x] Code block and blockquote preservation (avoid awkward single-line splits)
+- [x] Task 4: Pillow Canvas Renderer (`src/dotmdcutter/renderer.py`)
+  - [x] Crisp text rasterization
+  - [x] Styled headers with accents
+  - [x] Code block cards (background fill, border, monospace font, language badge)
+  - [x] Blockquotes with left border accent
+  - [x] Bullet points and list numbers
+  - [x] Page footer (`1 / 12`)
+  - [x] Export to PNG, JPG, BMP
+- [x] Task 5: Command Line Interface (`src/dotmdcutter/cli.py`, `src/dotmdcutter/__main__.py`)
+  - [x] Argument parsing (`input`, `--output`, `--width`, `--height`, `--orientation`, `--theme`, `--format`, `--font-size`, `--no-footer`, `--gui`)
+  - [x] Batch file processing and progress reporting
+- [x] Task 6: Interactive PyQt6 Desktop GUI (`src/dotmdcutter/gui.py`)
+  - [x] File selection and drag-and-drop
+  - [x] Preset picker (320x240 landscape, 240x320 portrait, custom)
+  - [x] Theme switcher, font size slider, format selector
+  - [x] Live preview canvas with 1x/2x/3x zoom
+  - [x] Page navigation slider and buttons
+  - [x] Export button with file dialog and progress
+- [x] Task 7: Automated Tests (`tests/`)
+  - [x] `test_parser.py`: Verify markdown structure parsing
+  - [x] `test_layout.py`: Verify pagination boundaries and word wrap
+  - [x] `test_renderer.py`: Verify generated image dimensions, formats, Cyrillic text
+  - [x] `test_cli.py`: Verify CLI execution end-to-end
+- [x] Task 8: Package Setup, Demo and Documentation
+  - [x] `pyproject.toml`
+  - [x] `sample.md`: Rich example with Russian notes, code, lists
+  - [x] `README.md`: User guide with examples and shortcuts

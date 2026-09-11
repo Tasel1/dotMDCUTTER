@@ -1,0 +1,515 @@
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
+from PIL import ImageDraw, ImageFont
+
+from .models import BlockType, InlineSpan, MarkdownBlock, PageConfig, SpanStyle
+from .themes import FontManager
+
+
+@dataclass
+class FormattedToken:
+    text: str
+    style: SpanStyle
+    font_size: int
+    width: float
+    is_whitespace: bool = False
+
+
+@dataclass
+class LineFragment:
+    text: str
+    style: SpanStyle
+    font_size: int
+    width: float
+
+
+@dataclass
+class RenderLine:
+    fragments: List[LineFragment] = field(default_factory=list)
+    x_offset: int = 0
+    y_offset: int = 0
+    height: int = 18
+    bullet_symbol: Optional[str] = None
+    bullet_x: int = 0
+    is_header: bool = False
+    header_level: int = 0
+    is_quote: bool = False
+    is_code: bool = False
+    is_hr: bool = False
+    is_empty: bool = False
+    box_start: bool = False
+    box_end: bool = False
+    box_lang: str = ""
+
+    @property
+    def total_width(self) -> float:
+        return sum(f.width for f in self.fragments)
+
+
+@dataclass
+class PageLayout:
+    page_number: int
+    lines: List[RenderLine] = field(default_factory=list)
+    total_height: int = 0
+
+
+class LayoutEngine:
+    def __init__(self, config: PageConfig, font_manager: FontManager):
+        self.config = config
+        self.fm = font_manager
+
+    def _get_font(self, size: int, style: SpanStyle) -> ImageFont.ImageFont:
+        if style == SpanStyle.BOLD:
+            return self.fm.get_font(size, "bold")
+        elif style == SpanStyle.ITALIC:
+            return self.fm.get_font(size, "italic")
+        elif style == SpanStyle.BOLD_ITALIC:
+            return self.fm.get_font(size, "bold")
+        elif style == SpanStyle.CODE:
+            return self.fm.get_font(size, "mono")
+        return self.fm.get_font(size, "regular")
+
+    def _measure_text(self, text: str, size: int, style: SpanStyle) -> float:
+        font = self._get_font(size, style)
+        # Use getlength if available or fallback
+        if hasattr(font, "getlength"):
+            return font.getlength(text)
+        bbox = font.getbbox(text)
+        return bbox[2] - bbox[0]
+
+    def _tokenize_spans(self, spans: List[InlineSpan], font_size: int) -> List[FormattedToken]:
+        tokens: List[FormattedToken] = []
+        for span in spans:
+            # Split words and whitespace
+            raw_text = span.text
+            if not raw_text:
+                continue
+
+            # Split into chunks of whitespace vs non-whitespace
+            idx = 0
+            while idx < len(raw_text):
+                char = raw_text[idx]
+                if char.isspace():
+                    # Collect whitespace
+                    ws_start = idx
+                    while idx < len(raw_text) and raw_text[idx].isspace():
+                        idx += 1
+                    ws_str = " "  # normalize multiple spaces/tabs to single space
+                    w = self._measure_text(ws_str, font_size, span.style)
+                    tokens.append(
+                        FormattedToken(
+                            text=ws_str,
+                            style=span.style,
+                            font_size=font_size,
+                            width=w,
+                            is_whitespace=True,
+                        )
+                    )
+                else:
+                    # Collect word
+                    word_start = idx
+                    while idx < len(raw_text) and not raw_text[idx].isspace():
+                        idx += 1
+                    word_str = raw_text[word_start:idx]
+                    w = self._measure_text(word_str, font_size, span.style)
+                    tokens.append(
+                        FormattedToken(
+                            text=word_str,
+                            style=span.style,
+                            font_size=font_size,
+                            width=w,
+                            is_whitespace=False,
+                        )
+                    )
+        return tokens
+
+    def _wrap_tokens_to_lines(
+        self,
+        tokens: List[FormattedToken],
+        max_width: int,
+        line_height: int,
+        x_offset: int = 0,
+        bullet_symbol: Optional[str] = None,
+        bullet_x: int = 0,
+        is_header: bool = False,
+        header_level: int = 0,
+        is_quote: bool = False,
+    ) -> List[RenderLine]:
+        lines: List[RenderLine] = []
+        current_fragments: List[LineFragment] = []
+        current_width = 0.0
+
+        for token in tokens:
+            # If start of line and token is whitespace, skip it
+            if not current_fragments and token.is_whitespace:
+                continue
+
+            if current_width + token.width <= max_width:
+                current_fragments.append(
+                    LineFragment(
+                        text=token.text,
+                        style=token.style,
+                        font_size=token.font_size,
+                        width=token.width,
+                    )
+                )
+                current_width += token.width
+            else:
+                # Token exceeds line width
+                if token.is_whitespace:
+                    # Trailing whitespace can just end the line
+                    continue
+
+                if current_fragments:
+                    # Finish current line
+                    is_first_line = len(lines) == 0
+                    lines.append(
+                        RenderLine(
+                            fragments=current_fragments,
+                            x_offset=x_offset,
+                            height=line_height,
+                            bullet_symbol=bullet_symbol if is_first_line else None,
+                            bullet_x=bullet_x if is_first_line else 0,
+                            is_header=is_header,
+                            header_level=header_level,
+                            is_quote=is_quote,
+                        )
+                    )
+                    current_fragments = []
+                    current_width = 0.0
+
+                # Check if single word is wider than max_width (e.g. very long string)
+                if token.width > max_width:
+                    # Break word character by character
+                    sub_str = ""
+                    for char in token.text:
+                        char_w = self._measure_text(char, token.font_size, token.style)
+                        if current_width + char_w > max_width and sub_str:
+                            sub_w = self._measure_text(sub_str, token.font_size, token.style)
+                            lines.append(
+                                RenderLine(
+                                    fragments=[
+                                        LineFragment(
+                                            text=sub_str,
+                                            style=token.style,
+                                            font_size=token.font_size,
+                                            width=sub_w,
+                                        )
+                                    ],
+                                    x_offset=x_offset,
+                                    height=line_height,
+                                    is_header=is_header,
+                                    header_level=header_level,
+                                    is_quote=is_quote,
+                                )
+                            )
+                            sub_str = char
+                            current_width = char_w
+                        else:
+                            sub_str += char
+                            current_width += char_w
+                    if sub_str:
+                        sub_w = self._measure_text(sub_str, token.font_size, token.style)
+                        current_fragments.append(
+                            LineFragment(
+                                text=sub_str,
+                                style=token.style,
+                                font_size=token.font_size,
+                                width=sub_w,
+                            )
+                        )
+                else:
+                    current_fragments.append(
+                        LineFragment(
+                            text=token.text,
+                            style=token.style,
+                            font_size=token.font_size,
+                            width=token.width,
+                        )
+                    )
+                    current_width = token.width
+
+        if current_fragments:
+            is_first_line = len(lines) == 0
+            lines.append(
+                RenderLine(
+                    fragments=current_fragments,
+                    x_offset=x_offset,
+                    height=line_height,
+                    bullet_symbol=bullet_symbol if is_first_line else None,
+                    bullet_x=bullet_x if is_first_line else 0,
+                    is_header=is_header,
+                    header_level=header_level,
+                    is_quote=is_quote,
+                )
+            )
+
+        return lines
+
+    def layout_blocks(self, blocks: List[MarkdownBlock]) -> List[PageLayout]:
+        """
+        Transforms parsed blocks into paginated pages that strictly fit within PageConfig bounds.
+        Guarantees no line of text is sliced in half.
+        """
+        base_sz = self.config.base_font_size
+        content_w = self.config.content_width
+        content_h = self.config.content_height
+
+        # Precalculate standard line heights
+        font_regular = self._get_font(base_sz, SpanStyle.NORMAL)
+        reg_metrics = font_regular.getmetrics()
+        reg_line_h = reg_metrics[0] + reg_metrics[1] + self.config.line_spacing
+
+        mono_sz = max(10, base_sz - 1)
+        font_mono = self._get_font(mono_sz, SpanStyle.CODE)
+        mono_metrics = font_mono.getmetrics()
+        mono_line_h = mono_metrics[0] + mono_metrics[1] + 2
+
+        pages: List[PageLayout] = []
+        current_page_lines: List[RenderLine] = []
+        current_page_h = 0
+
+        def finish_page():
+            nonlocal current_page_lines, current_page_h
+            # Remove trailing empty lines
+            while current_page_lines and current_page_lines[-1].is_empty:
+                current_page_h -= current_page_lines[-1].height
+                current_page_lines.pop()
+
+            if current_page_lines:
+                pages.append(
+                    PageLayout(
+                        page_number=len(pages) + 1,
+                        lines=current_page_lines,
+                        total_height=current_page_h,
+                    )
+                )
+                current_page_lines = []
+                current_page_h = 0
+
+        def add_space(spacing_h: int):
+            nonlocal current_page_h
+            if current_page_h == 0 or spacing_h <= 0:
+                return
+            if current_page_lines and current_page_lines[-1].is_empty:
+                # Collapse: ensure previous empty line is at least this height, don't stack
+                prev = current_page_lines[-1]
+                if prev.height < spacing_h:
+                    diff = spacing_h - prev.height
+                    if current_page_h + diff <= content_h:
+                        prev.height = spacing_h
+                        current_page_h += diff
+                return
+
+            if current_page_h + spacing_h <= content_h:
+                current_page_lines.append(RenderLine(is_empty=True, height=spacing_h))
+                current_page_h += spacing_h
+
+        for block_idx, block in enumerate(blocks):
+            if block.block_type == BlockType.PAGE_BREAK:
+                finish_page()
+                continue
+
+            if block.block_type == BlockType.EMPTY_LINE:
+                add_space(max(3, base_sz // 3))
+                continue
+
+            if block.block_type == BlockType.THEMATIC_BREAK:
+                hr_h = 10
+                if current_page_h + hr_h > content_h:
+                    finish_page()
+                current_page_lines.append(RenderLine(is_hr=True, height=hr_h))
+                current_page_h += hr_h
+                continue
+
+            if block.block_type == BlockType.HEADER:
+                h_size = base_sz + 4 if block.level == 1 else (base_sz + 2 if block.level == 2 else base_sz + 1)
+                h_font = self._get_font(h_size, SpanStyle.BOLD)
+                h_metrics = h_font.getmetrics()
+                h_line_h = h_metrics[0] + h_metrics[1] + 3
+
+                # Ensure all header spans are bold
+                for sp in block.spans:
+                    if sp.style == SpanStyle.NORMAL:
+                        sp.style = SpanStyle.BOLD
+
+                tokens = self._tokenize_spans(block.spans, h_size)
+                h_lines = self._wrap_tokens_to_lines(
+                    tokens=tokens,
+                    max_width=content_w,
+                    line_height=h_line_h,
+                    x_offset=0,
+                    is_header=True,
+                    header_level=block.level,
+                )
+
+                # Keep-with-next: if header lines + at least 1 line of content don't fit, push header to next page
+                total_h_needed = sum(l.height for l in h_lines) + reg_line_h + self.config.paragraph_spacing
+                if current_page_h > 0 and current_page_h + total_h_needed > content_h:
+                    finish_page()
+
+                for l in h_lines:
+                    if current_page_h + l.height > content_h:
+                        finish_page()
+                    current_page_lines.append(l)
+                    current_page_h += l.height
+
+                # Paragraph spacing after header
+                add_space(max(3, self.config.paragraph_spacing // 2))
+                continue
+
+            if block.block_type == BlockType.PARAGRAPH:
+                tokens = self._tokenize_spans(block.spans, base_sz)
+                p_lines = self._wrap_tokens_to_lines(
+                    tokens=tokens,
+                    max_width=content_w,
+                    line_height=reg_line_h,
+                    x_offset=0,
+                )
+
+                for l in p_lines:
+                    if current_page_h + l.height > content_h:
+                        finish_page()
+                    current_page_lines.append(l)
+                    current_page_h += l.height
+
+                add_space(self.config.paragraph_spacing)
+                continue
+
+            if block.block_type == BlockType.BLOCKQUOTE:
+                quote_indent = 12
+                avail_w = content_w - quote_indent
+                # In quote blocks, normal text is styled as italic
+                quote_spans = []
+                for sp in block.spans:
+                    new_style = SpanStyle.BOLD_ITALIC if sp.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC) else SpanStyle.ITALIC
+                    quote_spans.append(InlineSpan(text=sp.text, style=new_style))
+
+                tokens = self._tokenize_spans(quote_spans, base_sz)
+                q_lines = self._wrap_tokens_to_lines(
+                    tokens=tokens,
+                    max_width=avail_w,
+                    line_height=reg_line_h,
+                    x_offset=quote_indent,
+                    is_quote=True,
+                )
+
+                total_q_h = sum(l.height for l in q_lines)
+                if current_page_h > 0 and total_q_h <= content_h and current_page_h + total_q_h > content_h:
+                    finish_page()
+
+                for l in q_lines:
+                    if current_page_h + l.height > content_h:
+                        finish_page()
+                    current_page_lines.append(l)
+                    current_page_h += l.height
+
+                add_space(self.config.paragraph_spacing)
+                continue
+
+            if block.block_type == BlockType.LIST_ITEM:
+                indent_level = block.level
+                bullet_x = indent_level * 12
+                bullet_str = f"{block.order_number}." if block.is_ordered else "•"
+                bullet_w = self._measure_text(bullet_str + " ", base_sz, SpanStyle.BOLD)
+                text_x = int(bullet_x + bullet_w)
+                avail_w = content_w - text_x
+
+                tokens = self._tokenize_spans(block.spans, base_sz)
+                li_lines = self._wrap_tokens_to_lines(
+                    tokens=tokens,
+                    max_width=avail_w,
+                    line_height=reg_line_h,
+                    x_offset=text_x,
+                    bullet_symbol=bullet_str,
+                    bullet_x=bullet_x,
+                )
+
+                for l in li_lines:
+                    if current_page_h + l.height > content_h:
+                        finish_page()
+                    current_page_lines.append(l)
+                    current_page_h += l.height
+
+                # Small spacing after list item
+                add_space(max(2, self.config.paragraph_spacing // 3))
+                continue
+
+            if block.block_type == BlockType.CODE_BLOCK:
+                card_padding = 6
+                avail_code_w = content_w - 2 * card_padding
+                code_lines = block.code_lines or [""]
+
+                badge_w = (self._measure_text(block.language.upper(), 9, SpanStyle.CODE) + 14) if block.language else 0
+
+                # Break each code line if it exceeds avail_code_w
+                wrapped_code_lines: List[str] = []
+                for l_idx, cl in enumerate(code_lines):
+                    if not cl:
+                        wrapped_code_lines.append("")
+                        continue
+
+                    # First line needs to reserve space for language badge if present
+                    max_line_w = (avail_code_w - badge_w) if (l_idx == 0 and badge_w > 0) else avail_code_w
+
+                    cl_w = self._measure_text(cl, mono_sz, SpanStyle.CODE)
+                    if cl_w <= max_line_w:
+                        wrapped_code_lines.append(cl)
+                    else:
+                        sub = ""
+                        curr_limit = max_line_w
+                        for c in cl:
+                            if self._measure_text(sub + c, mono_sz, SpanStyle.CODE) > curr_limit:
+                                wrapped_code_lines.append(sub)
+                                sub = "  -> " + c
+                                curr_limit = avail_code_w
+                            else:
+                                sub += c
+                        if sub:
+                            wrapped_code_lines.append(sub)
+
+                # Calculate total height of the code block
+                total_code_h = len(wrapped_code_lines) * mono_line_h + 2 * card_padding
+                # If the entire code block fits on a single page, but doesn't fit on current page, move it to next page
+                if current_page_h > 0 and total_code_h <= content_h and current_page_h + total_code_h > content_h:
+                    finish_page()
+
+                for idx, cl_text in enumerate(wrapped_code_lines):
+                    is_start = (idx == 0)
+                    is_end = (idx == len(wrapped_code_lines) - 1)
+
+                    line_h = mono_line_h + (card_padding if is_start else 0) + (card_padding if is_end else 0)
+
+                    if current_page_h + line_h > content_h:
+                        finish_page()
+                        is_start = True
+
+                    frag = LineFragment(
+                        text=cl_text,
+                        style=SpanStyle.CODE,
+                        font_size=mono_sz,
+                        width=self._measure_text(cl_text, mono_sz, SpanStyle.CODE),
+                    )
+
+                    current_page_lines.append(
+                        RenderLine(
+                            fragments=[frag] if cl_text else [],
+                            x_offset=card_padding,
+                            height=mono_line_h,
+                            is_code=True,
+                            box_start=is_start,
+                            box_end=is_end,
+                            box_lang=block.language if is_start else "",
+                        )
+                    )
+                    current_page_h += line_h
+
+                add_space(self.config.paragraph_spacing)
+                continue
+
+        finish_page()
+        if not pages:
+            # Empty document -> at least 1 blank page
+            pages.append(PageLayout(page_number=1, lines=[], total_height=0))
+
+        return pages
