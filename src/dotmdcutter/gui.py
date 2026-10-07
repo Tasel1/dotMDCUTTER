@@ -300,8 +300,10 @@ class MarkdownCutterWindow(QMainWindow):
         title_label = QLabel("dotMDCUTTER")
         title_label.setFont(QFont("Inter, Segoe UI, sans-serif", 16, QFont.Weight.Bold))
         title_label.setStyleSheet("color: #60A5FA;")
-        version_label = QLabel("v1.1.0 • LaTeX & Unicode")
-        version_label.setStyleSheet("color: #71717A; font-size: 11px; padding-top: 5px;")
+        version_label = QLabel("v1.2.0 • Ultra-Crisp & HiDPI")
+        version_label.setStyleSheet(
+            "color: #71717A; font-size: 11px; padding-top: 5px;"
+        )
         title_box.addWidget(title_label)
         title_box.addWidget(version_label)
         title_box.addStretch()
@@ -330,7 +332,9 @@ class MarkdownCutterWindow(QMainWindow):
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("Пресет:"))
         self.combo_preset = QComboBox()
-        self.combo_preset.addItems(["320×240 (Альбомная)", "240×320 (Портретная)", "Пользовательское"])
+        self.combo_preset.addItems(
+            ["320×240 (Альбомная)", "240×320 (Портретная)", "Пользовательское"]
+        )
         self.combo_preset.currentIndexChanged.connect(self._on_preset_changed)
         preset_row.addWidget(self.combo_preset)
         disp_layout.addLayout(preset_row)
@@ -366,6 +370,17 @@ class MarkdownCutterWindow(QMainWindow):
         self.combo_format.addItems(["PNG", "JPG", "BMP"])
         format_row.addWidget(self.combo_format)
         disp_layout.addLayout(format_row)
+
+        scale_row = QHBoxLayout()
+        scale_row.addWidget(QLabel("Четкость / Масштаб:"))
+        self.combo_scale = QComboBox()
+        self.combo_scale.addItem("1x — Исходное (320×240, микро-четкость)", 1)
+        self.combo_scale.addItem("2x — HiDPI (640×480, повышенная четкость)", 2)
+        self.combo_scale.addItem("3x — Ultra (960×720, бритвенная резкость)", 3)
+        self.combo_scale.addItem("4x — Retina (1280×960)", 4)
+        self.combo_scale.currentIndexChanged.connect(self._render_preview)
+        scale_row.addWidget(self.combo_scale)
+        disp_layout.addLayout(scale_row)
 
         left_layout.addWidget(display_group)
 
@@ -435,7 +450,9 @@ class MarkdownCutterWindow(QMainWindow):
 
         top_bar.addWidget(QLabel("Масштаб:"))
         self.combo_zoom = QComboBox()
-        self.combo_zoom.addItems(["100% (1:1 Реальный размер)", "200% (2x Увеличение)", "300% (3x Четко)"])
+        self.combo_zoom.addItems(
+            ["100% (1:1 Реальный размер)", "200% (2x Увеличение)", "300% (3x Четко)"]
+        )
         self.combo_zoom.setCurrentIndex(1)
         self.combo_zoom.currentIndexChanged.connect(self._on_zoom_changed)
         top_bar.addWidget(self.combo_zoom)
@@ -447,7 +464,9 @@ class MarkdownCutterWindow(QMainWindow):
         top_bar.addWidget(self.btn_prev)
 
         self.lbl_page_info = QLabel("Страница 0 из 0")
-        self.lbl_page_info.setStyleSheet("font-weight: bold; color: #E4E4E7; padding: 0 8px;")
+        self.lbl_page_info.setStyleSheet(
+            "font-weight: bold; color: #E4E4E7; padding: 0 8px;"
+        )
         top_bar.addWidget(self.lbl_page_info)
 
         self.btn_next = QPushButton("След ▶")
@@ -485,7 +504,9 @@ class MarkdownCutterWindow(QMainWindow):
 
         main_layout.addWidget(right_panel, stretch=1)
 
-        self.statusBar().showMessage("Готово к работе. Выберите файл Markdown для нарезки.")
+        self.statusBar().showMessage(
+            "Готово к работе. Выберите файл Markdown для нарезки."
+        )
 
         # Shortcuts
         QShortcut(QKeySequence("Left"), self, self._prev_page)
@@ -598,6 +619,9 @@ print("Экран 320x240 готов!")
         self._update_display_image()
 
     def _get_current_config(self) -> PageConfig:
+        scale_val = (
+            self.combo_scale.currentData() if hasattr(self, "combo_scale") else 1
+        )
         return PageConfig(
             width=self.spin_width.value(),
             height=self.spin_height.value(),
@@ -605,6 +629,8 @@ print("Экран 320x240 готов!")
             show_footer=self.chk_footer.isChecked(),
             theme_name=self.combo_theme.currentData() or "dark",
             output_format=self.combo_format.currentText().lower(),
+            scale=scale_val or 1,
+            hr_as_pagebreak=self.chk_hr_pagebreak.isChecked(),
         )
 
     def _render_preview(self):
@@ -615,7 +641,10 @@ print("Экран 320x240 готов!")
         renderer = MarkdownRenderer(cfg)
 
         from .parser import parse_markdown
-        blocks = parse_markdown(self.markdown_text, hr_as_pagebreak=self.chk_hr_pagebreak.isChecked())
+
+        blocks = parse_markdown(
+            self.markdown_text, hr_as_pagebreak=self.chk_hr_pagebreak.isChecked()
+        )
         pages = renderer.layout_engine.layout_blocks(blocks)
         total = len(pages)
 
@@ -649,13 +678,17 @@ print("Экран 320x240 готов!")
         pix = QPixmap()
         pix.loadFromData(buf.getvalue())
 
-        target_w = pil_img.width * self.zoom_factor
-        target_h = pil_img.height * self.zoom_factor
+        scale_val = (
+            self.combo_scale.currentData() if hasattr(self, "combo_scale") else 1
+        )
+        scale_val = max(1, scale_val or 1)
+        target_w = int(pil_img.width * self.zoom_factor / scale_val)
+        target_h = int(pil_img.height * self.zoom_factor / scale_val)
         scaled_pix = pix.scaled(
             target_w,
             target_h,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.FastTransformation,
+            Qt.TransformationMode.SmoothTransformation,
         )
 
         self.preview_image_label.setPixmap(scaled_pix)
@@ -703,14 +736,18 @@ print("Экран 320x240 готов!")
         try:
             prefix = self.edit_prefix.text().strip() or "page_"
             saved = renderer.export_images(self.markdown_text, out_dir, prefix=prefix)
-            self.statusBar().showMessage(f"Экспорт завершен: {len(saved)} фото сохранены в {out_dir}")
+            self.statusBar().showMessage(
+                f"Экспорт завершен: {len(saved)} фото сохранены в {out_dir}"
+            )
             QMessageBox.information(
                 self,
                 "Экспорт успешно завершен",
                 f"Успешно нарезано и сохранено {len(saved)} изображений {cfg.width}×{cfg.height} в папку:\n{out_dir}",
             )
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сохранить изображения:\n{e}")
+            QMessageBox.critical(
+                self, "Ошибка экспорта", f"Не удалось сохранить изображения:\n{e}"
+            )
 
 
 def run_gui(initial_file: Optional[str] = None) -> int:

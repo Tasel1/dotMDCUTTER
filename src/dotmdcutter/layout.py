@@ -16,6 +16,7 @@ class FormattedToken:
     is_whitespace: bool = False
     is_math: bool = False
     math_img: Optional[Image.Image] = None
+    latex_code: str = ""
 
 
 @dataclass
@@ -26,6 +27,7 @@ class LineFragment:
     width: float
     is_math: bool = False
     math_img: Optional[Image.Image] = None
+    latex_code: str = ""
 
 
 @dataclass
@@ -34,6 +36,7 @@ class RenderLine:
     x_offset: int = 0
     y_offset: int = 0
     height: int = 18
+    base_height: int = 18
     bullet_symbol: Optional[str] = None
     bullet_x: int = 0
     is_header: bool = False
@@ -44,6 +47,7 @@ class RenderLine:
     is_empty: bool = False
     is_math_block: bool = False
     math_img: Optional[Image.Image] = None
+    latex_code: str = ""
     box_start: bool = False
     box_end: bool = False
     box_lang: str = ""
@@ -79,7 +83,9 @@ class LayoutEngine:
         style_str = self._style_name(style)
         return self.fm.measure_text(text, size, style_str)
 
-    def _tokenize_spans(self, spans: List[InlineSpan], font_size: int) -> List[FormattedToken]:
+    def _tokenize_spans(
+        self, spans: List[InlineSpan], font_size: int
+    ) -> List[FormattedToken]:
         tokens: List[FormattedToken] = []
         for span in spans:
             raw_text = span.text
@@ -106,6 +112,7 @@ class LayoutEngine:
                             is_whitespace=False,
                             is_math=True,
                             math_img=math_im,
+                            latex_code=raw_text,
                         )
                     )
                     continue
@@ -150,6 +157,15 @@ class LayoutEngine:
                     )
         return tokens
 
+    def _calc_line_height(
+        self, fragments: List[LineFragment], default_line_h: int
+    ) -> int:
+        h = default_line_h
+        for f in fragments:
+            if f.is_math and f.math_img:
+                h = max(h, f.math_img.height + 4)
+        return h
+
     def _wrap_tokens_to_lines(
         self,
         tokens: List[FormattedToken],
@@ -179,6 +195,7 @@ class LayoutEngine:
                         width=token.width,
                         is_math=token.is_math,
                         math_img=token.math_img,
+                        latex_code=token.latex_code,
                     )
                 )
                 current_width += token.width
@@ -188,11 +205,13 @@ class LayoutEngine:
 
                 if current_fragments:
                     is_first_line = len(lines) == 0
+                    line_h = self._calc_line_height(current_fragments, line_height)
                     lines.append(
                         RenderLine(
                             fragments=current_fragments,
                             x_offset=x_offset,
-                            height=line_height,
+                            height=line_h,
+                            base_height=line_height,
                             bullet_symbol=bullet_symbol if is_first_line else None,
                             bullet_x=bullet_x if is_first_line else 0,
                             is_header=is_header,
@@ -213,6 +232,7 @@ class LayoutEngine:
                             width=token.width,
                             is_math=True,
                             math_img=token.math_img,
+                            latex_code=token.latex_code,
                         )
                     )
                     current_width = token.width
@@ -222,7 +242,9 @@ class LayoutEngine:
                     for char in token.text:
                         char_w = self._measure_text(char, token.font_size, token.style)
                         if current_width + char_w > max_width and sub_str:
-                            sub_w = self._measure_text(sub_str, token.font_size, token.style)
+                            sub_w = self._measure_text(
+                                sub_str, token.font_size, token.style
+                            )
                             lines.append(
                                 RenderLine(
                                     fragments=[
@@ -246,7 +268,9 @@ class LayoutEngine:
                             sub_str += char
                             current_width += char_w
                     if sub_str:
-                        sub_w = self._measure_text(sub_str, token.font_size, token.style)
+                        sub_w = self._measure_text(
+                            sub_str, token.font_size, token.style
+                        )
                         current_fragments.append(
                             LineFragment(
                                 text=sub_str,
@@ -268,11 +292,13 @@ class LayoutEngine:
 
         if current_fragments:
             is_first_line = len(lines) == 0
+            line_h = self._calc_line_height(current_fragments, line_height)
             lines.append(
                 RenderLine(
                     fragments=current_fragments,
                     x_offset=x_offset,
-                    height=line_height,
+                    height=line_h,
+                    base_height=line_height,
                     bullet_symbol=bullet_symbol if is_first_line else None,
                     bullet_x=bullet_x if is_first_line else 0,
                     is_header=is_header,
@@ -367,13 +393,18 @@ class LayoutEngine:
                 if math_im is not None:
                     card_h = math_im.height + 10
                     # Keep whole math card on new page if doesn't fit
-                    if current_page_h > 0 and card_h <= content_h and current_page_h + card_h > content_h:
+                    if (
+                        current_page_h > 0
+                        and card_h <= content_h
+                        and current_page_h + card_h > content_h
+                    ):
                         finish_page()
 
                     current_page_lines.append(
                         RenderLine(
                             is_math_block=True,
                             math_img=math_im,
+                            latex_code=block.latex_code,
                             height=card_h,
                         )
                     )
@@ -387,7 +418,11 @@ class LayoutEngine:
                     block.language = "latex"
 
             if block.block_type == BlockType.HEADER:
-                h_size = base_sz + 4 if block.level == 1 else (base_sz + 2 if block.level == 2 else base_sz + 1)
+                h_size = (
+                    base_sz + 4
+                    if block.level == 1
+                    else (base_sz + 2 if block.level == 2 else base_sz + 1)
+                )
                 h_font = self.fm.get_font(h_size, "bold")
                 h_metrics = h_font.getmetrics()
                 h_line_h = h_metrics[0] + h_metrics[1] + 3
@@ -406,7 +441,11 @@ class LayoutEngine:
                     header_level=block.level,
                 )
 
-                total_h_needed = sum(l.height for l in h_lines) + reg_line_h + self.config.paragraph_spacing
+                total_h_needed = (
+                    sum(l.height for l in h_lines)
+                    + reg_line_h
+                    + self.config.paragraph_spacing
+                )
                 if current_page_h > 0 and current_page_h + total_h_needed > content_h:
                     finish_page()
 
@@ -442,7 +481,12 @@ class LayoutEngine:
                 avail_w = content_w - quote_indent
                 quote_spans = []
                 for sp in block.spans:
-                    new_style = SpanStyle.BOLD_ITALIC if sp.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC) else SpanStyle.ITALIC
+                    if sp.style in (SpanStyle.MATH, SpanStyle.CODE):
+                        new_style = sp.style
+                    elif sp.style in (SpanStyle.BOLD, SpanStyle.BOLD_ITALIC):
+                        new_style = SpanStyle.BOLD_ITALIC
+                    else:
+                        new_style = SpanStyle.ITALIC
                     quote_spans.append(InlineSpan(text=sp.text, style=new_style))
 
                 tokens = self._tokenize_spans(quote_spans, base_sz)
@@ -455,7 +499,11 @@ class LayoutEngine:
                 )
 
                 total_q_h = sum(l.height for l in q_lines)
-                if current_page_h > 0 and total_q_h <= content_h and current_page_h + total_q_h > content_h:
+                if (
+                    current_page_h > 0
+                    and total_q_h <= content_h
+                    and current_page_h + total_q_h > content_h
+                ):
                     finish_page()
 
                 for l in q_lines:
@@ -499,7 +547,11 @@ class LayoutEngine:
                 avail_code_w = content_w - 2 * card_padding
                 code_lines = block.code_lines or [""]
 
-                badge_w = (self._measure_text(block.language.upper(), 9, SpanStyle.CODE) + 14) if block.language else 0
+                badge_w = (
+                    (self._measure_text(block.language.upper(), 9, SpanStyle.CODE) + 14)
+                    if block.language
+                    else 0
+                )
 
                 wrapped_code_lines: List[str] = []
                 for l_idx, cl in enumerate(code_lines):
@@ -507,7 +559,11 @@ class LayoutEngine:
                         wrapped_code_lines.append("")
                         continue
 
-                    max_line_w = (avail_code_w - badge_w) if (l_idx == 0 and badge_w > 0) else avail_code_w
+                    max_line_w = (
+                        (avail_code_w - badge_w)
+                        if (l_idx == 0 and badge_w > 0)
+                        else avail_code_w
+                    )
 
                     cl_w = self._measure_text(cl, mono_sz, SpanStyle.CODE)
                     if cl_w <= max_line_w:
@@ -516,7 +572,10 @@ class LayoutEngine:
                         sub = ""
                         curr_limit = max_line_w
                         for c in cl:
-                            if self._measure_text(sub + c, mono_sz, SpanStyle.CODE) > curr_limit:
+                            if (
+                                self._measure_text(sub + c, mono_sz, SpanStyle.CODE)
+                                > curr_limit
+                            ):
                                 wrapped_code_lines.append(sub)
                                 sub = "  -> " + c
                                 curr_limit = avail_code_w
@@ -526,14 +585,22 @@ class LayoutEngine:
                             wrapped_code_lines.append(sub)
 
                 total_code_h = len(wrapped_code_lines) * mono_line_h + 2 * card_padding
-                if current_page_h > 0 and total_code_h <= content_h and current_page_h + total_code_h > content_h:
+                if (
+                    current_page_h > 0
+                    and total_code_h <= content_h
+                    and current_page_h + total_code_h > content_h
+                ):
                     finish_page()
 
                 for idx, cl_text in enumerate(wrapped_code_lines):
-                    is_start = (idx == 0)
-                    is_end = (idx == len(wrapped_code_lines) - 1)
+                    is_start = idx == 0
+                    is_end = idx == len(wrapped_code_lines) - 1
 
-                    line_h = mono_line_h + (card_padding if is_start else 0) + (card_padding if is_end else 0)
+                    line_h = (
+                        mono_line_h
+                        + (card_padding if is_start else 0)
+                        + (card_padding if is_end else 0)
+                    )
 
                     if current_page_h + line_h > content_h:
                         finish_page()

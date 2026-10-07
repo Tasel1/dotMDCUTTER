@@ -13,7 +13,9 @@ _INLINE_REGEX = re.compile(
 )
 
 
-def parse_inline_spans(text: str) -> List[InlineSpan]:
+def parse_inline_spans(
+    text: str, current_style: SpanStyle = SpanStyle.NORMAL
+) -> List[InlineSpan]:
     """Parse inline formatting (bold, italic, inline code, strike, inline LaTeX) into spans."""
     if not text:
         return []
@@ -24,30 +26,48 @@ def parse_inline_spans(text: str) -> List[InlineSpan]:
     for match in _INLINE_REGEX.finditer(text):
         start, end = match.span()
         if start > last_idx:
-            spans.append(InlineSpan(text=text[last_idx:start], style=SpanStyle.NORMAL))
+            spans.append(InlineSpan(text=text[last_idx:start], style=current_style))
 
         if match.group("code"):
             spans.append(InlineSpan(text=match.group("code"), style=SpanStyle.CODE))
         elif match.group("math"):
             spans.append(InlineSpan(text=match.group("math"), style=SpanStyle.MATH))
         elif match.group("bi"):
-            spans.append(InlineSpan(text=match.group("bi"), style=SpanStyle.BOLD_ITALIC))
+            inner = match.group("bi")
+            spans.extend(parse_inline_spans(inner, current_style=SpanStyle.BOLD_ITALIC))
         elif match.group("bold"):
-            spans.append(InlineSpan(text=match.group("bold"), style=SpanStyle.BOLD))
+            inner = match.group("bold")
+            st = (
+                SpanStyle.BOLD_ITALIC
+                if current_style == SpanStyle.ITALIC
+                else SpanStyle.BOLD
+            )
+            spans.extend(parse_inline_spans(inner, current_style=st))
         elif match.group("italic"):
-            spans.append(InlineSpan(text=match.group("italic"), style=SpanStyle.ITALIC))
+            inner = match.group("italic")
+            st = (
+                SpanStyle.BOLD_ITALIC
+                if current_style == SpanStyle.BOLD
+                else SpanStyle.ITALIC
+            )
+            spans.extend(parse_inline_spans(inner, current_style=st))
         elif match.group("strike"):
-            spans.append(InlineSpan(text=match.group("strike"), style=SpanStyle.STRIKETHROUGH))
+            inner = match.group("strike")
+            spans.extend(
+                parse_inline_spans(inner, current_style=SpanStyle.STRIKETHROUGH)
+            )
 
         last_idx = end
 
     if last_idx < len(text):
-        spans.append(InlineSpan(text=text[last_idx:], style=SpanStyle.NORMAL))
+        spans.append(InlineSpan(text=text[last_idx:], style=current_style))
 
     return spans
 
 
-def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[MarkdownBlock]:
+def parse_markdown(
+    markdown_text: str, hr_as_pagebreak: bool = False
+) -> List[MarkdownBlock]:
     """
     Parses a Markdown string into a sequence of structured MarkdownBlock elements,
     with full support for math blocks ($$ ... $$) and Unicode symbols.
@@ -141,7 +161,13 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
             continue
 
         # Check for explicit page break markers
-        if stripped.lower() in ("---page---", "---break---", "<!-- pagebreak -->", "\\newpage", "[pagebreak]"):
+        if stripped.lower() in (
+            "---page---",
+            "---break---",
+            "<!-- pagebreak -->",
+            "\\newpage",
+            "[pagebreak]",
+        ):
             blocks.append(MarkdownBlock(block_type=BlockType.PAGE_BREAK))
             i += 1
             continue
@@ -229,11 +255,19 @@ def parse_markdown(markdown_text: str, hr_as_pagebreak: bool = False) -> List[Ma
             next_stripped = next_line.strip()
             if not next_stripped:
                 break
-            if next_stripped.startswith(("#", "```", "~~~", "$$", ">", "-", "*", "+")) or re.match(r"^\d+\.\s+", next_stripped):
+            if next_stripped.startswith(
+                ("#", "```", "~~~", "$$", ">", "-", "*", "+")
+            ) or re.match(r"^\d+\.\s+", next_stripped):
                 break
             if re.match(r"^(-{3,}|\*{3,}|_{3,})$", next_stripped):
                 break
-            if next_stripped.lower() in ("---page---", "---break---", "<!-- pagebreak -->", "\\newpage", "[pagebreak]"):
+            if next_stripped.lower() in (
+                "---page---",
+                "---break---",
+                "<!-- pagebreak -->",
+                "\\newpage",
+                "[pagebreak]",
+            ):
                 break
             para_lines.append(next_stripped)
             i += 1

@@ -18,10 +18,13 @@ def test_render_all_themes(theme_name):
     assert images[0].size == (320, 240)
 
 
-@pytest.mark.parametrize("orientation,expected_size", [
-    ("landscape", (320, 240)),
-    ("portrait", (240, 320)),
-])
+@pytest.mark.parametrize(
+    "orientation,expected_size",
+    [
+        ("landscape", (320, 240)),
+        ("portrait", (240, 320)),
+    ],
+)
 def test_render_orientations(orientation, expected_size):
     w, h = expected_size
     config = PageConfig(width=w, height=h)
@@ -44,3 +47,26 @@ def test_export_formats(fmt):
             assert os.path.isfile(p)
             with Image.open(p) as img:
                 assert img.size == (320, 240)
+
+
+@pytest.mark.parametrize(
+    "scale,expected_size",
+    [
+        (1, (320, 240)),
+        (2, (640, 480)),
+        (3, (960, 720)),
+    ],
+)
+def test_render_scale_factor(scale, expected_size):
+    md = "# Заголовок с формулой $E = mc^2$\nПараграф с кодом `test`."
+    cfg_base = PageConfig(width=320, height=240, scale=1)
+    cfg_scaled = PageConfig(width=320, height=240, scale=scale)
+
+    r_base = MarkdownRenderer(cfg_base)
+    r_scaled = MarkdownRenderer(cfg_scaled)
+
+    imgs_base = r_base.render_markdown(md)
+    imgs_scaled = r_scaled.render_markdown(md)
+
+    assert len(imgs_base) == len(imgs_scaled)
+    assert imgs_scaled[0].size == expected_size

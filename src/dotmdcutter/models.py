@@ -55,9 +55,14 @@ class PageConfig:
     show_footer: bool = True
     theme_name: str = "dark"
     output_format: str = "png"  # png, jpg, bmp
-    jpeg_quality: int = 95
+    jpeg_quality: int = 98
     custom_font_path: Optional[str] = None
     custom_mono_font_path: Optional[str] = None
+    scale: int = (
+        1  # Resolution multiplier: 1=320x240, 2=640x480, 3=960x720 (Retina/HiDPI)
+    )
+    sharpen: bool = True  # Micro-sharpening filter for crisp text at 1x
+    hr_as_pagebreak: bool = False
 
     @property
     def content_width(self) -> int:
@@ -67,3 +72,11 @@ class PageConfig:
     def content_height(self) -> int:
         footer_reservation = 14 if self.show_footer else 0
         return max(10, self.height - 2 * self.margin_y - footer_reservation)
+
+    @property
+    def pixel_width(self) -> int:
+        return self.width * max(1, self.scale)
+
+    @property
+    def pixel_height(self) -> int:
+        return self.height * max(1, self.scale)

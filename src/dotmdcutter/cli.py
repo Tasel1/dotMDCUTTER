@@ -78,6 +78,19 @@ def create_parser() -> argparse.ArgumentParser:
         help="Top and bottom margin in pixels (default: 8)",
     )
     parser.add_argument(
+        "-s",
+        "--scale",
+        type=int,
+        choices=[1, 2, 3, 4],
+        default=1,
+        help="Resolution scale factor (1=native 320x240, 2=640x480, 3=960x720, 4=1280x960) with identical proportional layout",
+    )
+    parser.add_argument(
+        "--no-sharpen",
+        action="store_true",
+        help="Disable automatic text edge contrast enhancement",
+    )
+    parser.add_argument(
         "--no-footer",
         action="store_true",
         help="Hide page number footer to maximize text space",
@@ -108,9 +121,13 @@ def run_cli(args: Optional[List[str]] = None) -> int:
     if parsed.gui or (not parsed.input_file and len(sys.argv) <= 1):
         try:
             from .gui import run_gui
+
             return run_gui(parsed.input_file)
         except ImportError as e:
-            print(f"[Error] Failed to launch GUI: {e}. Ensure PyQt6 is installed.", file=sys.stderr)
+            print(
+                f"[Error] Failed to launch GUI: {e}. Ensure PyQt6 is installed.",
+                file=sys.stderr,
+            )
             return 1
 
     if not parsed.input_file:
@@ -145,10 +162,15 @@ def run_cli(args: Optional[List[str]] = None) -> int:
         show_footer=not parsed.no_footer,
         theme_name=parsed.theme,
         output_format=parsed.format,
+        scale=parsed.scale,
+        sharpen=not parsed.no_sharpen,
+        hr_as_pagebreak=parsed.hr_pagebreak,
     )
 
     renderer = MarkdownRenderer(config)
-    print(f"[*] Processing '{parsed.input_file}' ({width}x{height}, theme: {parsed.theme}, format: {parsed.format})...")
+    print(
+        f"[*] Processing '{parsed.input_file}' ({config.pixel_width}x{config.pixel_height} [scale {config.scale}x], theme: {parsed.theme}, format: {parsed.format})..."
+    )
 
     saved_files = renderer.export_images(
         markdown_text=md_text,

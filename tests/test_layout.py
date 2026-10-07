@@ -43,7 +43,9 @@ def test_layout_page_height_bounds(font_manager):
     engine = LayoutEngine(config, font_manager)
 
     # Multi-paragraph document
-    doc = "\n\n".join([f"Абзац номер {i}: текст описания процесса с пояснениями." for i in range(25)])
+    doc = "\n\n".join(
+        [f"Абзац номер {i}: текст описания процесса с пояснениями." for i in range(25)]
+    )
     blocks = parse_markdown(doc)
     pages = engine.layout_blocks(blocks)
 
@@ -52,7 +54,9 @@ def test_layout_page_height_bounds(font_manager):
 
     # Every single page must strictly obey content_height
     for p in pages:
-        assert p.total_height <= config.content_height, f"Page {p.page_number} height {p.total_height} > {config.content_height}"
+        assert p.total_height <= config.content_height, (
+            f"Page {p.page_number} height {p.total_height} > {config.content_height}"
+        )
 
 
 def test_empty_document(font_manager):
@@ -62,3 +66,24 @@ def test_empty_document(font_manager):
     pages = engine.layout_blocks(blocks)
     assert len(pages) == 1
     assert pages[0].page_number == 1
+
+
+def test_inline_math_line_height_expansion(font_manager):
+    config = PageConfig(width=320, height=240, base_font_size=13)
+    engine = LayoutEngine(config, font_manager)
+
+    # Document with tall fraction in inline math
+    doc = "Текст с высокой формулой $E = \\frac{m v_0^2}{2} = \\frac{m (v_x^2 + v_y^2)}{2}$ в строке."
+    blocks = parse_markdown(doc)
+    pages = engine.layout_blocks(blocks)
+
+    assert len(pages) >= 1
+    math_line = None
+    for line in pages[0].lines:
+        if any(f.is_math for f in line.fragments):
+            math_line = line
+            break
+    assert math_line is not None
+    # math_line.height must be greater than base text line height (>= 30px)
+    assert math_line.height > math_line.base_height
+    assert math_line.height >= 30

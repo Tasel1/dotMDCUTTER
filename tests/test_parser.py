@@ -24,6 +24,17 @@ def test_parse_inline_spans_mixed():
     assert "зачеркнуто" in texts
 
 
+def test_parse_inline_spans_nested_math():
+    spans = parse_inline_spans(r"**Шаг 7 ($r \approx R$):**")
+    assert len(spans) == 3
+    assert spans[0].text == "Шаг 7 ("
+    assert spans[0].style == SpanStyle.BOLD
+    assert spans[1].text == r"r \approx R"
+    assert spans[1].style == SpanStyle.MATH
+    assert spans[2].text == "):"
+    assert spans[2].style == SpanStyle.BOLD
+
+
 def test_parse_headers():
     md = "# Заголовок 1\n## Заголовок 2\n### Заголовок 3"
     blocks = parse_markdown(md)
@@ -48,8 +59,16 @@ def test_parse_lists():
     assert len(blocks) == 4
     assert blocks[0].block_type == BlockType.LIST_ITEM and not blocks[0].is_ordered
     assert blocks[1].block_type == BlockType.LIST_ITEM and not blocks[1].is_ordered
-    assert blocks[2].block_type == BlockType.LIST_ITEM and blocks[2].is_ordered and blocks[2].order_number == 1
-    assert blocks[3].block_type == BlockType.LIST_ITEM and blocks[3].is_ordered and blocks[3].order_number == 2
+    assert (
+        blocks[2].block_type == BlockType.LIST_ITEM
+        and blocks[2].is_ordered
+        and blocks[2].order_number == 1
+    )
+    assert (
+        blocks[3].block_type == BlockType.LIST_ITEM
+        and blocks[3].is_ordered
+        and blocks[3].order_number == 2
+    )
 
 
 def test_parse_page_breaks():

@@ -14,6 +14,10 @@ def test_clean_latex():
     assert clean_latex("$E = mc^2$") == "$E = mc^2$"
     assert clean_latex("$$E = mc^2$$") == "$E = mc^2$"
     assert clean_latex(r"\implies") == r"$\Longrightarrow$"
+    assert clean_latex(r"\le") == r"$\leq$"
+    assert clean_latex(r"\left( x \right)") == r"$\left( x \right)$"
+    assert clean_latex(r"\operatorname{arctg}(x)") == r"$\mathrm{arctg}(x)$"
+    assert clean_latex(r"\LaTeX") == r"$\mathrm{LaTeX}$"
     assert clean_latex("") == ""
 
 
@@ -25,13 +29,23 @@ def test_render_latex_inline():
     assert im.mode == "RGBA"
     assert im.width > 0 and im.height > 0
 
+    im_left = render_latex_to_image(r"g_0 \left(\frac{R}{R+h}\right)^2", font_size=13)
+    assert im_left is not None
+
+    im_op = render_latex_to_image(r"\operatorname{arctg}(x)", font_size=13)
+    assert im_op is not None
+
 
 def test_render_latex_scaling():
     if not is_latex_available():
         pytest.skip("matplotlib not available")
     # Long formula with narrow max_width
-    formula = r"\sum_{i=1}^n \int_0^1 f(x, y, z) dx dy dz = \frac{A + B + C + D}{E + F + G}"
-    im = render_latex_to_image(formula, font_size=13, color_hex="#58A6FF", max_width=180)
+    formula = (
+        r"\sum_{i=1}^n \int_0^1 f(x, y, z) dx dy dz = \frac{A + B + C + D}{E + F + G}"
+    )
+    im = render_latex_to_image(
+        formula, font_size=13, color_hex="#58A6FF", max_width=180
+    )
     assert im is not None
     assert im.width <= 180
 

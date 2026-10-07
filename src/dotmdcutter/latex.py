@@ -1,4 +1,5 @@
 import io
+import re
 from typing import Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
@@ -36,17 +37,17 @@ def clean_latex(formula: str) -> str:
     if not s:
         return ""
 
-    # Common macro aliases frequently emitted by LLMs
-    aliases = {
-        r"\implies": r"\Longrightarrow",
-        r"\iff": r"\Longleftrightarrow",
-        r"\impliedby": r"\Longleftarrow",
-        r"\le": r"\leq",
-        r"\ge": r"\geq",
-        r"\ne": r"\neq",
-    }
-    for macro, repl in aliases.items():
-        s = s.replace(macro, repl)
+    # Common macro aliases frequently emitted by LLMs / KaTeX / MathJax
+    # Use word boundary / non-alpha lookahead to prevent replacing prefixes like \left -> \leqft
+    s = re.sub(r"\\implies(?![a-zA-Z])", r"\\Longrightarrow", s)
+    s = re.sub(r"\\iff(?![a-zA-Z])", r"\\Longleftrightarrow", s)
+    s = re.sub(r"\\impliedby(?![a-zA-Z])", r"\\Longleftarrow", s)
+    s = re.sub(r"\\le(?![a-zA-Z])", r"\\leq", s)
+    s = re.sub(r"\\ge(?![a-zA-Z])", r"\\geq", s)
+    s = re.sub(r"\\ne(?![a-zA-Z])", r"\\neq", s)
+    s = re.sub(r"\\LaTeX(?![a-zA-Z])", r"\\mathrm{LaTeX}", s)
+    s = re.sub(r"\\operatorname\s*\{([^}]+)\}", r"\\mathrm{\1}", s)
+    s = re.sub(r"\\operatorname\s*\\([a-zA-Z]+)", r"\\\1", s)
 
     # Mathtext enters LaTeX math rendering mode when enclosed in $...$
     return f"${s}$"
@@ -57,10 +58,12 @@ def render_latex_to_image(
     font_size: int = 13,
     color_hex: str = "#E6EDF3",
     max_width: Optional[int] = None,
-    dpi: int = 110,
+    dpi: int = 120,
 ) -> Optional[Image.Image]:
     """
     Renders a LaTeX math expression into a transparent PIL RGBA Image.
+    Uses pure alpha mask extraction from grayscale luminance to eliminate
+    any background color contamination or white halos.
     Scales down proportionally if max_width is exceeded.
     Returns None if matplotlib is unavailable or if formula syntax is invalid.
     """
@@ -71,7 +74,7 @@ def render_latex_to_image(
     if not cleaned:
         return None
 
-    cache_key = (cleaned, font_size, color_hex, max_width)
+    cache_key = (cleaned, font_size, color_hex, max_width, dpi)
     if cache_key in _FORMULA_CACHE:
         cached = _FORMULA_CACHE[cache_key]
         return cached.copy() if cached is not None else None
@@ -86,17 +89,32 @@ def render_latex_to_image(
             prop=prop,
             dpi=dpi,
             format="png",
-            color=color_hex,
+            color="black",
         )
         buf.seek(0)
-        raw_img = Image.open(buf).convert("RGBA")
+        raw_gray = Image.open(buf).convert("L")
+        arr = np.array(raw_gray)
 
-        # Make the mathtext white background transparent
-        arr = np.array(raw_img)
-        # Identify background pixels (white/near-white from matplotlib rasterizer)
-        is_bg = (arr[:, :, 0] > 240) & (arr[:, :, 1] > 240) & (arr[:, :, 2] > 240)
-        arr[is_bg, 3] = 0
-        img = Image.fromarray(arr)
+        # Mathtext renders black glyphs on white (255) background.
+        # Alpha is strictly 255 - luminance.
+        alpha = (255 - arr).astype(np.uint8)
+
+        # Parse target hex color to RGB
+        c_hex = color_hex.lstrip("#")
+        if len(c_hex) == 6:
+            r = int(c_hex[0:2], 16)
+            g = int(c_hex[2:4], 16)
+            b = int(c_hex[4:6], 16)
+        else:
+            r, g, b = 230, 235, 240
+
+        rgba = np.zeros((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
+        rgba[:, :, 0] = r
+        rgba[:, :, 1] = g
+        rgba[:, :, 2] = b
+        rgba[:, :, 3] = alpha
+
+        img = Image.fromarray(rgba, mode="RGBA")
 
         # Scale down if exceeds max_width
         if max_width and img.width > max_width:
